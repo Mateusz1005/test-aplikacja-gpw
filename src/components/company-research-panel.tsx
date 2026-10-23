@@ -5,6 +5,7 @@ import {
   type ResearchItem,
   type ResearchFeed,
 } from "@/lib/research/google-news";
+import { searchRecentYouTubeVideos } from "@/lib/research/youtube";
 import {
   compareAnalystEvidence,
   hasPublicAnalystExcerpt,
@@ -98,15 +99,17 @@ function analystCategory(item: ResearchItem): "Prognozy i szacunki" | "Rekomenda
 function ResearchList({
   feed,
   emptyMessage,
+  sourceLabel = "Google News RSS",
 }: {
   feed: ResearchFeed;
   emptyMessage: string;
+  sourceLabel?: string;
 }) {
   if (!feed.available) {
     return (
       <p className="search-hint">
-        Nie udało się pobrać wyników z Google News. Otwórz wyszukiwanie źródłowe
-        poniżej i zweryfikuj materiały bezpośrednio u wydawcy.
+        Nie udało się pobrać wyników ({sourceLabel}). Otwórz wyszukiwanie
+        źródłowe poniżej i zweryfikuj materiały bezpośrednio u wydawcy.
       </p>
     );
   }
@@ -117,7 +120,7 @@ function ResearchList({
         <p className="search-hint">{emptyMessage}</p>
         {feed.checkedAt && (
           <p className="research-feed-freshness">
-            Google News RSS · sprawdzono {formatCheckTime(feed.checkedAt)}
+            {sourceLabel} · sprawdzono {formatCheckTime(feed.checkedAt)}
           </p>
         )}
       </>
@@ -138,7 +141,7 @@ function ResearchList({
       </ul>
       {feed.checkedAt && (
         <p className="research-feed-freshness">
-          Google News RSS · sprawdzono {formatCheckTime(feed.checkedAt)}
+          {sourceLabel} · sprawdzono {formatCheckTime(feed.checkedAt)}
         </p>
       )}
     </>
@@ -162,7 +165,7 @@ export default async function CompanyResearchPanel({
     `${tickerQuery} ${terms}`,
   ];
 
-  const [newsResults, analystResults, videoResults, reportingResults] = await Promise.all([
+  const [newsResults, analystResults, videoResults, reportingResults, youtubeResults] = await Promise.all([
     searchRecentGoogleNewsVariants(
       [`${companyQuery}`, `${tickerQuery}`],
       new Date(),
@@ -179,6 +182,7 @@ export default async function CompanyResearchPanel({
       searchVariants("(kalendarz OR terminarz OR harmonogram) (publikacji raportów OR raportów okresowych)"),
       new Date(),
     ),
+    searchRecentYouTubeVideos(companyName, ticker),
   ]);
   const news = relevantFeed(newsResults, companyName, ticker);
   const analystFeed = relevantFeed(analystResults, companyName, ticker, "analyst");
@@ -187,7 +191,30 @@ export default async function CompanyResearchPanel({
     items: analystFeed.items.filter(hasPublicAnalystExcerpt),
   };
   const analystComparison = compareAnalystEvidence(analystCommentary.items);
-  const videoItems = relevantFeed(videoResults, companyName, ticker, "video");
+  const googleVideoItems = relevantFeed(videoResults, companyName, ticker, "video");
+  const youtubeItems = {
+    ...youtubeResults,
+    items: youtubeResults.items.filter((item) =>
+      isRelevantCompanyTitle(item.title, companyName, ticker),
+    ),
+  };
+  const videoItems: ResearchFeed = {
+    available: youtubeItems.available || googleVideoItems.available,
+    checkedAt: youtubeItems.checkedAt ?? googleVideoItems.checkedAt,
+    items: [...new Map(
+      [...youtubeItems.items, ...googleVideoItems.items].map((item) => [item.url, item]),
+    ).values()]
+      .sort((left, right) =>
+        new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime(),
+      )
+      .slice(0, 12),
+  };
+  const videoSourceLabel = youtubeItems.available
+    ? "YouTube Data API i Google News RSS"
+    : "Google News RSS";
+  const youtubeSearch = new URL("https://www.youtube.com/results");
+  youtubeSearch.searchParams.set("search_query", `${companyName} ${ticker} raport`);
+  youtubeSearch.searchParams.set("sp", "EgQIAxAB");
   const reportingSchedule = {
     ...reportingResults,
     items: reportingResults.items
@@ -329,11 +356,15 @@ export default async function CompanyResearchPanel({
       <div className="research-feed">
         <h5>Materiały do obejrzenia</h5>
         <ResearchList
-          emptyMessage="Nie znaleziono pasujących filmów z ostatnich sześciu miesięcy."
+          emptyMessage="Nie znaleziono pasujących filmów."
           feed={videoItems}
+          sourceLabel={videoSourceLabel}
         />
+        <a href={youtubeSearch.toString()} rel="noreferrer" target="_blank">
+          Szukaj na YouTube
+        </a>{" "}
         <a href={videoSearch.toString()} rel="noreferrer" target="_blank">
-          Otwórz wyniki wyszukiwania wideo z ostatnich sześciu miesięcy
+          Szukaj wideo w Google
         </a>
         <p className="search-hint">
           Linki prowadzą do materiałów lub wyników wyszukiwania. Treść filmów
