@@ -501,7 +501,8 @@ async function DashboardContent({ searchParams }: { searchParams: SearchParams }
             </p>
           )}
 
-          {user.email &&
+          {access !== null &&
+            user.email &&
             user.email_confirmed_at &&
             user.email.toLowerCase() === process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase() && (
               <p className="trial-banner">
