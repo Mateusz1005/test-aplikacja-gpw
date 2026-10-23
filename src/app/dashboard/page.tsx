@@ -261,8 +261,14 @@ function CompanyDocumentSection({
   );
 }
 
-function escapeLikePattern(value: string): string {
-  return value.replace(/([\\%_])/g, "\\$1");
+function normalizeSearchText(value: string): string {
+  return value
+    .toLocaleLowerCase("pl-PL")
+    .replace(/ł/g, "l")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function marketName(market: string): string {
@@ -341,50 +347,43 @@ async function DashboardContent({ searchParams }: { searchParams: SearchParams }
   let searchResults: Instrument[] = [];
 
   if (query && !invalidSearch) {
-    const pattern = `%${escapeLikePattern(query)}%`;
-    const normalizedQuery = query.toLocaleUpperCase("pl-PL");
-    const isIsinSearch = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/i.test(query);
-    const [byName, byTicker, byIsin] = await Promise.all([
-      supabase
-        .from("instrument_catalog")
-        .select("id, company_name, ticker, isin, market, source_url, source_date, confidence, investor_relations_url, next_reporting_date, next_reporting_source_url, next_reporting_verified_at")
-        .ilike("company_name", pattern)
-        .limit(50),
-      supabase
-        .from("instrument_catalog")
-        .select("id, company_name, ticker, isin, market, source_url, source_date, confidence, investor_relations_url, next_reporting_date, next_reporting_source_url, next_reporting_verified_at")
-        .ilike("ticker", pattern)
-        .limit(50),
-      supabase
-        .from("instrument_catalog")
-        .select("id, company_name, ticker, isin, market, source_url, source_date, confidence, investor_relations_url, next_reporting_date, next_reporting_source_url, next_reporting_verified_at")
-        .ilike("isin", pattern)
-        .limit(50),
-    ]);
+    const normalizedQuery = normalizeSearchText(query);
+    const queryWords = normalizedQuery.split(" ").filter(Boolean);
+    const compactQuery = normalizedQuery.replace(/ /g, "");
+    const catalog = await supabase
+      .from("instrument_catalog")
+      .select("id, company_name, ticker, isin, market, source_url, source_date, confidence, investor_relations_url, next_reporting_date, next_reporting_source_url, next_reporting_verified_at")
+      .order("company_name")
+      .limit(1000);
 
-    if (byName.error) throw byName.error;
-    if (byTicker.error) throw byTicker.error;
-    if (byIsin.error) throw byIsin.error;
+    if (catalog.error) throw catalog.error;
 
     const tickerPriority = (instrument: Instrument): number => {
-      const ticker = instrument.ticker.toLocaleUpperCase("pl-PL");
-      const isin = instrument.isin.toLocaleUpperCase("pl-PL");
-      if (isIsinSearch && isin === normalizedQuery) return 0;
-      if (ticker === normalizedQuery) return 0;
-      if (ticker.startsWith(normalizedQuery)) return 1;
-      if (isin === normalizedQuery) return 2;
-      if (ticker.includes(normalizedQuery)) return 3;
-      if (instrument.company_name.toLocaleUpperCase("pl-PL").startsWith(normalizedQuery)) return 4;
+      const ticker = normalizeSearchText(instrument.ticker).replace(/ /g, "");
+      const isin = normalizeSearchText(instrument.isin).replace(/ /g, "");
+      const name = normalizeSearchText(instrument.company_name);
+      if (ticker === compactQuery || isin === compactQuery) return 0;
+      if (ticker.startsWith(compactQuery)) return 1;
+      if (name.startsWith(normalizedQuery)) return 2;
+      if (name.split(" ").some((word) => word.startsWith(normalizedQuery))) return 3;
+      if (name.includes(normalizedQuery)) return 4;
       return 5;
     };
 
-    searchResults = [...new Map(
-      [...byTicker.data, ...byName.data, ...byIsin.data].map((item) => [item.id, item]),
-    ).values()].sort((a, b) =>
+    const matchesQuery = (instrument: Instrument): boolean => {
+      if (queryWords.length === 0) return false;
+      const ticker = normalizeSearchText(instrument.ticker).replace(/ /g, "");
+      const isin = normalizeSearchText(instrument.isin).replace(/ /g, "");
+      if (ticker.includes(compactQuery) || isin.includes(compactQuery)) return true;
+      const name = normalizeSearchText(instrument.company_name);
+      return queryWords.every((word) => name.includes(word) || ticker.includes(word));
+    };
+
+    searchResults = catalog.data.filter(matchesQuery).sort((a, b) =>
       tickerPriority(a) - tickerPriority(b) ||
       a.ticker.localeCompare(b.ticker, "pl") ||
       a.company_name.localeCompare(b.company_name, "pl"),
-    );
+    ).slice(0, 50);
   }
 
   const visibleInstruments = [...new Map(
